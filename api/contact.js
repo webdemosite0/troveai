@@ -1,36 +1,26 @@
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://wjgkldnffszedndedjojs.supabase.co';
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndqZ2tsZG5mZnN6ZWRuZGVqb2pzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg5NjE2MTIsImV4cCI6MjEwNDUzNzYxMn0.cNwYB7IjDdgK8lo8KCV74qgj7IHy6VjXBnJpfJMJHLs';
+
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+
+  if (req.method === 'OPTIONS') return res.status(204).end();
 
   if (req.method === 'GET') {
-    return res.status(200).json({
-      ok: true,
-      provider: 'resend',
-      configured: Boolean(process.env.RESEND_API_KEY),
-      from: process.env.RESEND_FROM || 'official@troveai.site',
-      to: process.env.RESEND_TO || 'official@troveai.site'
-    });
-  }
-
-  if (req.method === 'OPTIONS') {
-    res.setHeader('Allow', 'POST, GET, OPTIONS');
-    return res.status(204).end();
+    return res.status(200).json({ ok: true, provider: 'supabase', configured: Boolean(SUPABASE_URL && SUPABASE_ANON_KEY) });
   }
 
   if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST, GET, OPTIONS');
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
-    if (!process.env.RESEND_API_KEY) {
-      console.error('RESEND_API_KEY is missing from Vercel environment variables.');
-      return res.status(500).json({ error: 'Email service is not configured yet.' });
-    }
-
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
     const { type, name, email, company, role, link, interest, message, website } = body;
 
-    // Honeypot: silently accept bot submissions without sending email.
     if (website) return res.status(200).json({ ok: true });
 
     if (!name || !email || !message || !['join', 'invest'].includes(type)) {
@@ -38,57 +28,43 @@ export default async function handler(req, res) {
     }
 
     const clean = (value, max = 2000) => String(value ?? '').trim().slice(0, max);
-    const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    const safeName = clean(name, 100);
+    const safeEmail = clean(email, 200).toLowerCase();
+    const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(safeEmail);
+
     if (!emailOk) return res.status(400).json({ error: 'Please enter a valid email address.' });
 
-    const safeName = clean(name, 100);
-    const safeEmail = clean(email, 200);
-    const subject = type === 'join'
-      ? `New Trove talent application — ${safeName}`
-      : `New Trove investor inquiry — ${safeName}`;
+    const payload = {
+      type,
+      name: safeName,
+      email: safeEmail,
+      company: clean(company, 200),
+      role: clean(role, 200),
+      link: clean(link, 500),
+      interest: clean(interest, 200),
+      message: clean(message, 4000),
+      status: 'new'
+    };
 
-    const escapeHtml = (value) => clean(value).replace(/[&<>\"']/g, char => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-    }[char]));
-
-    const html = `
-      <div style="font-family:Arial,sans-serif;line-height:1.6;color:#111827">
-        <h2>${type === 'join' ? 'New Trove talent application' : 'New Trove investor inquiry'}</h2>
-        <p><strong>Name:</strong> ${escapeHtml(safeName)}</p>
-        <p><strong>Email:</strong> ${escapeHtml(safeEmail)}</p>
-        ${company ? `<p><strong>Company:</strong> ${escapeHtml(company)}</p>` : ''}
-        ${role ? `<p><strong>Role:</strong> ${escapeHtml(role)}</p>` : ''}
-        ${link ? `<p><strong>Profile / Portfolio:</strong> ${escapeHtml(link)}</p>` : ''}
-        ${interest ? `<p><strong>Investment interest:</strong> ${escapeHtml(interest)}</p>` : ''}
-        <p><strong>Message:</strong></p>
-        <p style="white-space:pre-wrap">${escapeHtml(message)}</p>
-      </div>`;
-
-    const response = await fetch('https://api.resend.com/emails', {
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/applications`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-        'Content-Type': 'application/json'
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=representation'
       },
-      body: JSON.stringify({
-        from: process.env.RESEND_FROM || 'Trove Website <official@troveai.site>',
-        to: [process.env.RESEND_TO || 'official@troveai.site'],
-        reply_to: safeEmail,
-        subject,
-        html
-      })
+      body: JSON.stringify(payload)
     });
 
     const result = await response.json().catch(() => ({}));
 
     if (!response.ok) {
-      console.error('Resend error:', response.status, result);
-      return res.status(502).json({
-        error: 'We could not send your message right now. Please try again.'
-      });
+      console.error('Supabase error:', response.status, result);
+      return res.status(502).json({ error: 'We could not save your application right now. Please try again.' });
     }
 
-    return res.status(200).json({ ok: true, id: result.id || null });
+    return res.status(200).json({ ok: true, id: result?.[0]?.id || null });
   } catch (error) {
     console.error('Contact endpoint error:', error);
     return res.status(500).json({ error: 'Something went wrong. Please try again.' });
