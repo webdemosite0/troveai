@@ -1,5 +1,5 @@
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://wjgkldnffszedndejojs.supabase.co';
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndqZ2tsZG5mZnN6ZWRuZGVqb2pzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg5NjE2MTIsImV4cCI6MjEwNDUzNzYxMn0.cNwYB7IjDdgK8lo8KCV74qgj7IHy6VjXBnJpfJMJHLs';
+const SUPABASE_KEY = process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY || 'sb_publishable_L654grsHppTWaZjmL6HlDA_8uUxgMXb';
 
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
@@ -8,31 +8,72 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
 
   if (req.method === 'OPTIONS') return res.status(204).end();
-  if (req.method === 'GET') return res.status(200).json({ ok: true, provider: 'supabase', configured: Boolean(SUPABASE_URL && SUPABASE_ANON_KEY) });
+  if (req.method === 'GET') {
+    return res.status(200).json({
+      ok: true,
+      provider: 'supabase',
+      configured: Boolean(SUPABASE_URL && SUPABASE_KEY)
+    });
+  }
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
     const { type, name, email, company, role, link, interest, message, website } = body;
+
+    // Honeypot: silently accept bot submissions.
     if (website) return res.status(200).json({ ok: true });
-    if (!name || !email || !message || !['join', 'invest'].includes(type)) return res.status(400).json({ error: 'Please complete the required fields.' });
+
+    if (!name || !email || !message || !['join', 'invest'].includes(type)) {
+      return res.status(400).json({ error: 'Please complete the required fields.' });
+    }
 
     const clean = (value, max = 2000) => String(value ?? '').trim().slice(0, max);
     const safeName = clean(name, 100);
     const safeEmail = clean(email, 200).toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(safeEmail)) return res.status(400).json({ error: 'Please enter a valid email address.' });
 
-    const payload = { type, name: safeName, email: safeEmail, company: clean(company, 200), role: clean(role, 200), link: clean(link, 500), interest: clean(interest, 200), message: clean(message, 4000), status: 'new' };
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(safeEmail)) {
+      return res.status(400).json({ error: 'Please enter a valid email address.' });
+    }
+
+    const payload = {
+      type,
+      name: safeName,
+      email: safeEmail,
+      company: clean(company, 200) || null,
+      role: clean(role, 200) || null,
+      link: clean(link, 500) || null,
+      interest: clean(interest, 200) || null,
+      message: clean(message, 4000),
+      status: 'new'
+    };
+
     const response = await fetch(`${SUPABASE_URL}/rest/v1/applications`, {
       method: 'POST',
-      headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=representation' },
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=representation'
+      },
       body: JSON.stringify(payload)
     });
+
     const result = await response.json().catch(() => ({}));
+
     if (!response.ok) {
-      console.error('Supabase error:', response.status, result);
-      return res.status(502).json({ error: 'We could not save your application right now. Please try again.' });
+      console.error('Supabase application insert failed:', {
+        status: response.status,
+        code: result?.code,
+        message: result?.message,
+        details: result?.details,
+        hint: result?.hint
+      });
+      return res.status(502).json({
+        error: 'We could not save your application right now. Please try again.'
+      });
     }
+
     return res.status(200).json({ ok: true, id: result?.[0]?.id || null });
   } catch (error) {
     console.error('Contact endpoint error:', error);
