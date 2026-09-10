@@ -39,11 +39,13 @@ export default async function handler(req, res) {
       status: 'new'
     };
 
+    // With the new Supabase sb_publishable_* key, send it as the API key only.
+    // Do not put a publishable key in Authorization: Bearer, because that header
+    // expects a JWT access token and can cause the REST request to be rejected.
     const response = await fetch(`${SUPABASE_URL}/rest/v1/applications`, {
       method: 'POST',
       headers: {
         apikey: SUPABASE_KEY,
-        Authorization: `Bearer ${SUPABASE_KEY}`,
         'Content-Type': 'application/json',
         Prefer: 'return=representation'
       },
