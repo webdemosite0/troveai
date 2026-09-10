@@ -1,5 +1,5 @@
 -- Trove Supabase security setup
--- Run this in the Supabase SQL Editor.
+-- Run this entire file in the Supabase SQL Editor.
 --
 -- IMPORTANT:
 -- 1. Create your admin user first in Supabase Auth > Users.
@@ -16,7 +16,6 @@ create table if not exists private.admin_users (
   created_at timestamptz not null default now()
 );
 
--- Keep the admin registry out of the public Data API.
 revoke all on table private.admin_users from anon, authenticated, public;
 revoke all on schema private from anon, public;
 grant usage on schema private to authenticated;
@@ -58,16 +57,22 @@ create index if not exists applications_status_idx on public.applications (statu
 
 alter table public.applications enable row level security;
 
--- Remove the previous broad authenticated-user policies.
-drop policy if exists "Anyone can submit applications" on public.applications;
+-- Supabase Data API permissions. These explicit grants are required for the
+-- public form to reach the table on current/new Supabase projects.
+grant usage on schema public to anon, authenticated;
+grant insert on table public.applications to anon, authenticated;
+grant select, update, delete on table public.applications to authenticated;
+
+-- Re-apply the grants after any older/restrictive setup.
+revoke select, update, delete on table public.applications from anon;
+
+ drop policy if exists "Anyone can submit applications" on public.applications;
 drop policy if exists "Authenticated admins can read applications" on public.applications;
 drop policy if exists "Authenticated admins can update applications" on public.applications;
 drop policy if exists "Authenticated admins can delete applications" on public.applications;
-
--- Least-privilege grants: visitors can submit; only authenticated users can attempt admin operations.
-revoke all on table public.applications from anon, authenticated;
-grant insert on table public.applications to anon, authenticated;
-grant select, update, delete on table public.applications to authenticated;
+drop policy if exists "Trove admins can read applications" on public.applications;
+drop policy if exists "Trove admins can update applications" on public.applications;
+drop policy if exists "Trove admins can delete applications" on public.applications;
 
 create policy "Anyone can submit applications"
 on public.applications
@@ -94,12 +99,6 @@ for delete
 to authenticated
 using ((select private.is_admin()));
 
--- ============================================================
--- AFTER creating your admin user in Supabase Auth, run:
--- ============================================================
+-- after creating admin:
 -- insert into private.admin_users (user_id)
 -- values ('PASTE-YOUR-ADMIN-USER-UUID-HERE');
---
--- Verify it with:
--- select * from private.admin_users;
--- ============================================================
